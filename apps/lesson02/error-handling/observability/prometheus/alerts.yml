@@ -1,0 +1,33 @@
+# Basit alarm kuralları. Alertmanager kurmadığımız için alarmları Prometheus arayüzündeki
+# "Alerts" sekmesinden (http://localhost:9090/alerts) takip ediyoruz.
+groups:
+  - name: order-services
+    rules:
+      - alert: ServiceDown
+        expr: up{job=~".*-order-service"} == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} erişilemiyor"
+
+      - alert: HighServerErrorRate
+        # Son 1 dakikadaki isteklerin %10'undan fazlası 5xx ile sonuçlandıysa
+        expr: |
+          sum by (job) (rate(http_requests_total{status=~"5.."}[1m]))
+            /
+          sum by (job) (rate(http_requests_total[1m]))
+            > 0.10
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} 5xx oranı yüksek: {{ $value | humanizePercentage }}"
+
+      - alert: UnexpectedCrash
+        # Panic (Rust) veya yakalanmamış exception (Python) = kodda bir BUG var demektir.
+        expr: sum by (job) (increase(app_errors_total{kind=~"panic|unhandled"}[1m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} içinde beklenmeyen hata (panic / unhandled exception)"

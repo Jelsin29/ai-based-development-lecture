@@ -1,0 +1,58 @@
+// Grafana Alloy: Docker container'larının stdout/stderr loglarını toplayıp Loki'ye gönderir.
+// Uygulamalar Loki'yi tanımaz; sadece stdout'a yazar. Bu ayrım sayesinde log altyapısını
+// değiştirmek uygulama kodunu değiştirmeyi gerektirmez.
+
+// 1) Sadece "logging=alloy" etiketine sahip container'ları keşfet
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+
+  filter {
+    name   = "label"
+    values = ["logging=alloy"]
+  }
+}
+
+// 2) docker-compose servis adını Loki'de "service" etiketi olarak kullan
+discovery.relabel "containers" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+// 3) Container loglarını oku
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  relabel_rules = discovery.relabel.containers.rules
+  forward_to    = [loki.process.json_logs.receiver]
+}
+
+// 4) JSON logdan "level" alanını çıkar, normalize et (WARNING -> warn) ve etiket yap.
+//    Etiket (label) sayısını düşük tutmak önemlidir: request_id gibi her satırda değişen
+//    değerler ETİKET YAPILMAZ, sorgu anında "| json" ile okunur.
+loki.process "json_logs" {
+  forward_to = [loki.write.local.receiver]
+
+  stage.json {
+    expressions = { level = "level" }
+  }
+
+  stage.template {
+    source   = "level"
+    template = "{{ if eq .Value \"WARNING\" }}warn{{ else }}{{ ToLower .Value }}{{ end }}"
+  }
+
+  stage.labels {
+    values = { level = "" }
+  }
+}
+
+// 5) Loki'ye gönder
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

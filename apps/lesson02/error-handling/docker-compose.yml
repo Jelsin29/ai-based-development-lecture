@@ -1,0 +1,106 @@
+# Hata yönetimi, loglama ve izleme (monitoring) örneği
+#
+#   docker compose up -d --build
+#   python scripts/traffic.py
+#
+# Arayüzler:
+#   Grafana     http://localhost:3000   (admin / admin, dashboard: "Hata Yönetimi - Sipariş Servisleri")
+#   Prometheus  http://localhost:9090   (Alerts sekmesi: http://localhost:9090/alerts)
+#   Alloy       http://localhost:12345  (log toplama pipeline'ının görsel hali)
+#   Rust API    http://localhost:8081
+#   Python API  http://localhost:8082   (Swagger: http://localhost:8082/docs)
+
+x-app-logging: &app-labels
+  # Alloy sadece bu etikete sahip container'ların loglarını toplar
+  logging: "alloy"
+
+services:
+  rust-order-service:
+    build: ./rust-order-service
+    container_name: eh-rust-order-service
+    environment:
+      APP_ENV: production
+      RUST_LOG: info
+      PAYMENT_FAILURE_RATE: "0.3"
+    ports:
+      - "8081:8081"
+    labels: *app-labels
+    networks: [observability]
+
+  python-order-service:
+    build: ./python-order-service
+    container_name: eh-python-order-service
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: INFO
+      PAYMENT_FAILURE_RATE: "0.3"
+    ports:
+      - "8082:8082"
+    labels: *app-labels
+    networks: [observability]
+
+  loki:
+    image: grafana/loki:3.5.0
+    container_name: eh-loki
+    command: -config.file=/etc/loki/loki-config.yaml
+    volumes:
+      - ./observability/loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+    networks: [observability]
+
+  alloy:
+    image: grafana/alloy:v1.8.3
+    container_name: eh-alloy
+    user: "0"   # Docker soketini okuyabilmesi için (sadece demo ortamı!)
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Container loglarını okuyabilmek için Docker soketi gerekir
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "12345:12345"
+    depends_on: [loki]
+    networks: [observability]
+
+  prometheus:
+    image: prom/prometheus:v3.4.0
+    container_name: eh-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "9090:9090"
+    networks: [observability]
+
+  grafana:
+    image: grafana/grafana:12.0.0
+    container_name: eh-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/error-handling.json
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on: [prometheus, loki]
+    networks: [observability]
+
+networks:
+  observability:
+    driver: bridge
+
+volumes:
+  loki_data:
