@@ -289,6 +289,41 @@ fail: CvApp.Api.Filters.ApiExceptionFilterAttribute[0]
 
 Bknz: [Aman Dikkat](#aman-dikkat)
 
+## Gün 02.5 - Hata Yönetimi, Loglama ve İzleme
+
+Yazılım uygulamalarında hata yönetimi sadece .Net ve Java dillerinde olduğu gibi Exception yönetiminden ibaret değildir. Bu bölümde, farklı dillerde ve platformlarda hata yönetimi, loglama ve izleme konularına yer veriliyor. Hata yönetimi *(Error Handling)* konusundaki yanılgılardan birisi tüm hataların aynı şekilde ele alınması gerektiği düşüncesidir. Örneğin bir kullanıcının yanlış girdiği form alanı sonucu oluşan hata ile bir dizinin sınırlarının dışına çıkılması sonucu oluşan hata aynı kategoride değerlendirilmemelidir. Bu anlamda aşağıdaki tabloyu bilgi amaçlı kullanabiliriz.
+
+| **Kategori** | **Örnek** | **Kimin Hatası?** | **Ne Yapmalı?** |
+| --- | --- | --- | --- |
+| **Girdi / Doğrulama** *(Validation)* | Ürün tutarı alanına `0` girilmesi, eksik JSON alanı | İstemci *(client)* | Anlamlı bir mesajla reddebiliriz *(4xx)*. Sistemin sağlığıyla ilgisi yoktur. |
+| **İş Kuralı** *(Business Rule)* | Stok yetersiz, müşteri bulunamadı gibi | Kimsenin hatası değildir, beklenen bir durumdur | Alan *(domain)* diline uygun bir hata dönülebilir *(404, 409)*. |
+| **Geçici Altyapı** *(Transient Infrastructure)* | Ödeme servisi zaman aşımına uğrar *(timeout)*, veritabanı bağlantısı kopar vb | Dış bağımlılık | Yeniden dene *(retry)* yine de olmazsa nazikçe başarısız ol *(503)*, **alarm çalıştır**. |
+| **Programlama Hatası** *(Bug)* | `null` referans, `unwrap()` ile panic, sıfıra bölme | Geliştirici | Yakalamaya çalışmak yerine **düzeltmeliyiz**. Çalışma zamanında sadece sistemi ayakta tutmak, log bırakmak ve alarm çalıştırmak. |
+
+İlk üç kategori **beklenen** *(expected / recoverable)* hatalardır. Yazdığımız kod bu hatalarla nasıl başa çıkacağını bilir. Dördüncü satırda ise **beklenmeyen** *(unexpected / unrecoverable)* hata söz konusudur. Onu ancak bir test, bir log satırı veya bir alarm bize haber verebilir.
+
+> Beklenen hatalar **tip sistemi veya exception hiyerarşisi** ile modellenir. Beklenmeyen hatalar ise **gözlemlenebilirlik** *(loglama + izleme)* ile yakalanır.
+
+Tabii dillere göre hata yönetimi felsefesi de değişir. Bir önceki modülde daha çok managed dillerdeki exception yönetimi üzerinde durulmuştu. Bu felsefeyle ilgili olarak da aşağıdaki tablodan bazı çıkarımlar yapabiliriz.
+
+| **Model** | **Diller** | **Fikir** | **Pros** | **Cons** |
+| --- | --- | --- | --- | --- |
+| **Exception** | C#, Java, Python, JavaScript | Hata fırlatılır *(throw/raise)*, çağrı yığınında *(call stack)* yukarı doğru bir yakalayıcı bulana kadar ilerler. | İdeal akış *(happy path)* temiz kalır ve merkezi yakalama kolaydır. | Bir fonksiyonun hangi hataları fırlatacağı imzasından anlaşılmaz. Unutulan hata çalışma zamanında patlar. Stack unwinding maliyetlidir. |
+| **Error Value** | Go, C | Fonksiyon sonuçla birlikte bir hata değeri döndürür, `val, err := f()` gibi | Açık ve öngörülebilir olması avantajdır. Fonksiyonun nasıl bir hata döneceği bellidir. | `if err != nil` tekrarı bir süre sonra fazlalaşır ve çağıran tarafta hatayı kontrol etmeyi unutmak da mümkündür. |
+| **Tip Sistemi ile Hata** | Rust *(Result)*, Haskell *(Either)*, F#, Swift | Hata, dönüş tipinin bir parçasıdır: `Result<T, E>`. Derleyici hatayı ele almayı zorunlu kılar. | Hata yolları derleme zamanında görünür ve unutmak mümkün değildir. | Başlangıçta daha fazla tip tanımı ve dönüşüm gerektirir. |
+| **Let It Crash** | Erlang, Elixir *(Actor Model)* | Hatalı süreç ölür ve bir **supervisor** onu temiz bir state ile yeniden başlatır. | Dağıtık *(distributed)* ve hataya dayanıklı *(resilient)* sistemlerde büyük avantaj sağlar. | Bir supervisor ağacının tasarımını gerektirir. |
+
+Burada bahsedilen modeller birbirini dışlamazlar. Örneğin Rust dilinde de kurtarılamaz durumlar için `panic!` kullanımı vardır, Python'da da istenirse sonuç nesneleri ile hata değeri döndürülebilir. Önemli olan hangi durumda hangi aracın kullanılacağının farkında olmaktır.
+
+Hata yönetiminde dilden bağımsız bir takım önemli ilkeler ve kurallar da vardır;
+
+- `catch {}` veya `except: pass` gibi boş bloklar kullanmayın. Hatayı ya ele alın, ya bir üst çağrıya iletin ya da en azından loglayın. Zira aksi taktirde hatayı sessizce yutmuş oluruz *(Do Not Swallow Errors)*.
+- Geçersiz bir durumu olabildiğince erken ve oluştuğu yere yakın tespit edin. Bozuk veriyle ilerlemek hataları gizler ve teşhis etmeyi zorlaştırır *(Fail Fast)*.
+- Üretim ortamlarında stack trace, SQL sorgusu, dosya yolu gibi bilgiler hassas veri olarak kabul edilir ve istemcilere gönderilmez. Bular loglara yazılır ve izleme sistemlerine iletilir. Aksi taktirde güvenlik ve gizlilik riskleri oluşur. *(Sensitive Data Exposure)*
+- Hataları başka bir veriye çevirmemiz gereken durumlarda orijinal hatayı kaybetmemeye özen gösterin. Bu sayede hatanın kaynağını ve bağlamını koruyabiliriz. *(Preserve Context)*
+- Özellikle web tabanlı sistemlerdeki hataları göz önüne alırsak HTTP response dönüşümlerini tek bir noktadan yönetmek düşünülebilir.
+- Bazen hataların farklı katmanlara sızmaması gerekir. Örneğin veritabanı sürücüsünün verdiği KeyError veya HTTP istemcisinin TimeoutException'ı iş katmanına sızmamalı, alan diline uygun bir şekilde dönüştürülmelidir. Söz gelimi NotFound gibi bir hata PaymentGatewayError gibi dönüştürülmeli *(Translate at boundaries)*
+
 ## Gün 03 - Bağımlılıkları Yönetmek ve Kod Kalitesini Ölçmek
 
 Bir yazılım projesinin kalitesi birçok kritere bağlıdır. Kod kalitesi, mimari uyum, test edilebilirlik, okunabilirlik *(readability)*, bakım kolaylığı *(maintainability)*, izlenebilirlik *(monitoring)* gibi kriterler bu faktörlerden sadece birkaçıdır. Zaman içerisinde projelerin kalitesini korumak için birçok yazılım prensibi ve tasarım kalıbı ortaya çıkmıştır. **SOLID** ilkeleri, **Clean Code** prensipleri, **Design Patterns** gibi kavramlar bu alanda önemli yer tutar. Hatta yanlış bilinen doğruları temsil etmek için **Anti-pattern** kavramları da tanımlanmıştır. Tüm bu prensipler, kalitesi yüksek, sürdürülebilir ve genişletilebilir yazılımlar geliştirmek için birer rehber niteliğindedir. Ancak bunları benimsemek ve uygulamak her zaman kolay değildir. Projeye yeni başlayan bir geliştirici için bu kavramların hepsini aynı anda uygulamak oldukça güçtür. Bu nedenle, bu derste daha çok bağımlılık yönetimi ve kod kalitesini ölçmek için kullanılan araçlar üzerinde durulmaya çalışılmıştır.
