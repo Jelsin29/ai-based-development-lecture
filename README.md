@@ -10,6 +10,7 @@ Konya Gıda ve Tarım Üniversitesi Yazılım Mühendisliği ve Pamukkale Ünive
   - [Gün 01 - CV Bank Projesi için Prototip Geliştirme](#gün-01---cv-bank-projesi-için-prototip-geliştirme)
   - [Gün 02 - Exception Handling, Debugging ve Docker Kullanımı](#gün-02---exception-handling-debugging-ve-docker-kullanımı)
     - [Dikkat Edilmesi Gereken Noktalar](#dikkat-edilmesi-gereken-noktalar)
+  - [Gün 02.5 - Hata Yönetimi, Loglama ve İzleme](#gün-025---hata-yönetimi-loglama-ve-i̇zleme)
   - [Gün 03 - Bağımlılıkları Yönetmek ve Kod Kalitesini Ölçmek](#gün-03---bağımlılıkları-yönetmek-ve-kod-kalitesini-ölçmek)
   - [Gün 04 - Yazılım Çözümlerinde Testin Önemi](#gün-04---yazılım-çözümlerinde-testin-önemi)
   - [Gün 05 - Yazılım Mimarileri ve Temel Seviyede Bir Örnek](#gün-05---yazılım-mimarileri-ve-temel-seviyede-bir-örnek)
@@ -323,6 +324,136 @@ Hata yönetiminde dilden bağımsız bir takım önemli ilkeler ve kurallar da v
 - Hataları başka bir veriye çevirmemiz gereken durumlarda orijinal hatayı kaybetmemeye özen gösterin. Bu sayede hatanın kaynağını ve bağlamını koruyabiliriz. *(Preserve Context)*
 - Özellikle web tabanlı sistemlerdeki hataları göz önüne alırsak HTTP response dönüşümlerini tek bir noktadan yönetmek düşünülebilir.
 - Bazen hataların farklı katmanlara sızmaması gerekir. Örneğin veritabanı sürücüsünün verdiği KeyError veya HTTP istemcisinin TimeoutException'ı iş katmanına sızmamalı, alan diline uygun bir şekilde dönüştürülmelidir. Söz gelimi NotFound gibi bir hata PaymentGatewayError gibi dönüştürülmeli *(Translate at boundaries)*
+
+Aynı hata, geliştirme ortamında ve üretim ortamında farklı ihtiyaçlar doğurur. Geliştirme zamanında amaç hatayı **hızla anlamak ve düzeltmek**, üretimde ise **sistemi ayakta tutmak, kullanıcıyı korumak ve hatayı fark edebilmek**tir.
+
+| **Konu** | **Geliştirme Zamanı** | **Üretim Ortamı** |
+| --- | --- | --- |
+| **Kim okuyor?** | Geliştirici *(insan)* | Log toplayıcı, sorgu motoru *(makine)* ve tabii operasyon nöbetçisi |
+| **Log formatı** | Renkli, okunabilir, çok satırlı | Tek satır **JSON** *(structured logging)* |
+| **Log seviyesi** | `debug` | `info` *(gerekirse anlık olarak artırılır)* |
+| **Stack trace / backtrace** | Konsolda, tam haliyle | Sadece loglarda ve izleme sistemlerinde ama **istemciye asla!** |
+| **İstemciye hata mesajı** | Detaylı | 5xx için genel mesaj ve `request_id` |
+| **Hatayı nasıl buluruz?** | Debugger, breakpoint, test | Log sorguları, metrikler, alarmlar |
+| **Araçlar** | IDE, `cargo clippy`, `ruff`, `mypy`, unit test vb | Loki, Prometheus, Grafana, ve farklı alarm sistemleri |
+
+Log gerçekten çok kıymetli bir bilgidir. Farklı seviyeleri vardır ve bazen doğru şekilde ele alınmazlar. Loglar, Error, Warn, Info ve Debug olmak üzere dört farklı seviyeye sahiptir. Sık yapılan hatalardan birisi 4xx durumlarını hep Error olarak loglamaktır. Aslında bir kullanıcının yanlış ID girmesi sistemin hatası değildir. Bu yüzden her 404'ü Error olarak loglamak, gerçek hataları gürültülü bir şekilde gizler ve teşhis etmeyi zorlaştırır *(Bu konuyla ilgili alert fatigue kavramına bakılabilir)*.
+
+Üstteki tabloda yer alan önemli kavramlardan birisi de request_id'dir. Aslında her isteğe özel olarak üretilir ve loglarda, izleme sistemlerinde ve hata mesajlarında kullanılır. Bu sayede belirli bir isteğin izini sürmek ve hataları ilişkilendirmek mümkün olur.
+
+### Örnek Çalışma
+
+`error-handling` klasöründe Rust ve Python dilleri ile yazılmış iki örnek servis yer almaktadır. Aynı HTTP Api'sini sunarlar ama hata yönetimleri kendi dillerine özgüdür. Bu örneklerde amaç aynı hata senaryolarının farklı felsefelerde nasıl ele alındığını görebilmektir. Servis noktalarını aşağıdaki gibi özetleyebiliriz.
+
+| **Endpoint** | **Başarılı** | **Hata Senaryoları** |
+| --- | --- | --- |
+| `GET /orders/{id}` | 200 | **404** sipariş yok |
+| `POST /orders` | 201 | **422** geçersiz miktar / bozuk JSON, **409** stok yetersiz |
+| `POST /orders/{id}/pay` | 200 | **503** ödeme sağlayıcısı 3 denemede de başarısız *(geçici altyapı hatası, retry ile)* |
+| `GET /debug/bug` | - | **500** bilerek bırakılmış bir **bug** *(Rust: panic, Python: yakalanmamış exception)* |
+| `GET /metrics` | 200 | Prometheus metrikleri |
+
+Tüm hatalar istemciye aynı formatta döner:
+
+```json
+{ "error": { "kind": "out_of_stock", "message": "'monitor' için yetersiz stok (istenen: 10, mevcut: 5)" } }
+```
+
+İstemciye dönen her yanıtta ayrıca bir `x-request-id` başlığı *(header)* bulunur. İstemci bir hata bildirdiğinde bu değer ile ilgili tüm log satırlarına ulaşabiliriz.
+
+Klasör yapısı aşağıdaki gibidir.
+
+```text
+apps/lesson02/error-handling/
+├── docker-compose.yml          # Servisler + Loki + Alloy + Prometheus + Grafana
+├── rust-order-service/         # axum, thiserror, tracing, prometheus
+├── python-order-service/       # FastAPI, logging, prometheus_client
+├── observability/              # Loki, Alloy, Prometheus ve Grafana ayarları
+└── scripts/traffic.py          # Karışık (başarılı + hatalı) trafik üretici
+```
+
+Ortamı ayağa kaldırmak için;
+
+```bash
+cd apps/lesson02/error-handling
+docker compose up -d --build
+docker compose ps
+```
+
+Eğer bir sıkıntı olmazsa aşağıdaki gibi servisler çalışıyor olmalıdır.
+
+| **Arayüz** | **Adres** |
+| --- | --- |
+| Grafana | `http://localhost:3000` *(admin / admin)* |
+| Prometheus | `http://localhost:9090` |
+| Prometheus Alarmları | `http://localhost:9090/alerts` |
+| Alloy *(log boru hattı)* | `http://localhost:12345` |
+| Rust API | `http://localhost:8081` |
+| Python API *(Swagger)* | `http://localhost:8082/docs` |
+
+> İlk derleme Rust bağımlılıkları nedeniyle birkaç dakika sürebilir. Ana dizindeki `docker-compose.yml` ile port çakışması olmaması için Prometheus *(9090)*, Grafana *(3000)* ve Loki *(3100)* portlarını kullanan başka bir container olmadığından emin oolmakta yarar var.
+
+Çalışmayı görmenin en iyi yolu python script'i ile trafik üretmektir.
+
+```bash
+python scripts/traffic.py --duration 300
+# Daha fazla bug görmek için:
+python scripts/traffic.py --duration 300 --bug-rate 0.1
+```
+
+Sonrasında `http://localhost:3000` adresinden Grafana arayüzüne giderek oluşan trafik ve hataları gözlemleyebiliriz.
+
+![day_02_03](./images/day02_03.png)
+
+Birde alarm simülasyonu yapabiliriz. Örnekte üç seviyeli bir alarm mekaniği simüle edilmektedir. Bu kuralları prometheus'un [alerts.yml](../apps/lesson02/error-handling/observability/prometheus/alerts.yml) dosyasında tanımladık.
+
+| **Alarm** | **Koşul** | **Anlamı** |
+| --- | --- | --- |
+| `ServiceDown` | `up == 0` *(15 sn)* | Servis erişilemiyor |
+| `HighServerErrorRate` | 5xx oranı > %10 *(30 sn)* | Kullanıcılar etkileniyor |
+| `UnexpectedCrash` | Son 1 dk'da panic / unhandled > 0 | Kodda bug var |
+
+Söz konusu alarm seviyeleri için aşağıdaki python script'i ile testler başlatabiliriz.
+
+```bash
+# Bug Alarmı Simülasyonu
+python scripts/traffic.py --duration 120 --bug-rate 0.2
+
+# Ödeme sağlayıcısının iyice güvenilmez hale getirilmesi (docker-compose.yml'de PAYMENT_FAILURE_RATE: "0.9")
+# ve sonrasında yeniden trafik simülasyonu yapıyoruz.
+docker compose up -d rust-order-service
+python scripts/traffic.py --duration 120
+
+# Python servisini durduralım
+docker compose stop python-order-service
+```
+
+`http://localhost:9090/alerts` sayfasında alarmların önce **Pending**, `for` süresi dolunca **Firing** durumuna geçtiği görülür. Gerçek bir sistemde bu alarmlar **Alertmanager** veya **Grafana Alerting** üzerinden Slack, e-posta, PagerDuty gibi kanallara da yönlendirilir.
+
+![day_02_04](./images/day02_04.png)
+
+Python servisi durdurulduğunda da bir alert tetiklenir ve `http://localhost:9090/alerts` sayfasında bu durum gözlemlenebilir.
+
+![day_02_05](./images/day02_05.png)
+
+Pek tabii hatalar yapay zeka araçları ile analiz ettirilebilir. Burada bağlamın *(context)* kalitesi de oldukça önemlidir. Sadece, `HTTP 500 hatası alıyorum, düzelt` gibi yüzeysel bilgiler iletmek yerine, hatanın oluştuğu senaryo, loglar ve sistem durumu gibi detaylar da sağlanabilir. Söz gelimi elimizde Loki'den alınmış JSON bazlı log satırları varsa şöyle bir prompt pekala işe yarayacaktır.
+
+```text
+Prompt: Aşağıda rust-order-service'e ait, aynı request_id'ye sahip log satırları var.
+Hatanın kök nedenini bul, ilgili kaynak dosyadaki satırı göster ve unwrap kullanmadan,
+AppError::Validation dönen bir düzeltme öner. Düzeltme için bir unit test de yaz.
+
+<Loki'den kopyalanan JSON log satırları>
+```
+
+Yapısal loglar ve `request_id` sayesindeki yapay zeka modellerine tek bir isteğin tüm hikayesini verebiliriz.
+
+### Dikkat edilmesi gerekenler
+
+- Yapay zeka ajanları, "hata vermesin" yönündeki isteklere sıklıkla **her şeyi `try/except Exception: pass` ile sarmalayarak** veya `unwrap_or_default()` ile hatayı sessizce yutarak cevap verebilir. Bu yaklaşım hatayı düzeltmek değil gizlemektir. Üretilen kodu mutlaka gözden geçirin ve hataların doğru şekilde ele alındığından emin olun.
+- Üretim loglarını bir yapay zeka aracına yapıştırmadan önce içinde **kişisel veri, token, parola** olmadığından emin olun *(Gün 13 - Güvenlik)*.
+- Modelden hata yollarını kapsayan testler üretmesini isteyin *(Negative path testing)*. Bu sayede yazılımın geçersiz verilerle, hatalı kullanıcı eylemleriyle veya beklenmeyen durumlarla karşılaştığında nasıl davrandığını test edebilirsiniz.
+- Bu kurallar bir projede kalıcı hale getirilecekse, Gün 11'de ele alınan `custom agent / skill` veya proje talimat dosyalarına *(`copilot-instructions.md`, `CLAUDE.md` vb.)* yazılabilir. Örneğin: *"Handler'larda try/catch kullanma, AppError döndür. 4xx durumlarını WARN olarak logla."*
 
 ## Gün 03 - Bağımlılıkları Yönetmek ve Kod Kalitesini Ölçmek
 
