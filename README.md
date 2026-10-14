@@ -382,16 +382,38 @@ docker compose ps
 
 Eğer bir sıkıntı olmazsa aşağıdaki gibi servisler çalışıyor olmalıdır.
 
-| **Arayüz** | **Adres** |
-| --- | --- |
-| Grafana | `http://localhost:3000` *(admin / admin)* |
-| Prometheus | `http://localhost:9090` |
-| Prometheus Alarmları | `http://localhost:9090/alerts` |
-| Alloy *(log boru hattı)* | `http://localhost:12345` |
-| Rust API | `http://localhost:8081` |
-| Python API *(Swagger)* | `http://localhost:8082/docs` |
+| **Arayüz** | **Adres** | **Kullanım Amacı** |
+| --- | --- | --- |
+| Grafana | `http://localhost:3000` *(admin / admin)* | Prometheus'taki metrikleri ve Loki'deki logları **tek bir ekranda** birleştirir. Hazır gelen *"Hata Yönetimi - Sipariş Servisleri"* dashboard'u ile hata oranı, hata türleri, yanıt süreleri ve hata logları izlenir. **Explore** menüsünden LogQL / PromQL sorguları çalıştırılır. Kendi başına veri saklamaz, sadece veri kaynaklarını sorgular ve görselleştirir. |
+| Prometheus | `http://localhost:9090` | Servislerin `/metrics` uç noktalarını 5 saniyede bir **çekerek** *(pull / scrape)* sayısal metrikleri zaman serisi olarak saklar. *"Son 5 dakikada 5xx oranı ne?"*, *"Kaç panic oldu?"* gibi **ne kadar / ne sıklıkla** sorularına cevap verir. **Status -> Targets** sayfasından servislerin erişilebilir olup olmadığı görülebilir. |
+| Prometheus Alarmları | `http://localhost:9090/alerts` | `alerts.yml` dosyasındaki kuralların *(`ServiceDown`, `HighServerErrorRate`, `UnexpectedCrash`)* anlık durumunu gösterir: **Inactive** -> **Pending** *(koşul sağlandı, `for` süresi bekleniyor)* -> **Firing** *(alarm aktif)*. Gerçek sistemlerde bu alarmlar Alertmanager ile Slack, e-posta gibi kanallara yönlendirilir. |
+| Alloy *(log boru hattı)* | `http://localhost:12345` | Container loglarını toplayıp Loki'ye taşıyan **ajan** *(collector)*. Arayüzde log boru hattının bileşenlerini *(keşif -> etiketleme -> JSON ayrıştırma ->gönderim)* bir graf olarak ve her bileşenin sağlık durumunu görürüz. Loglar Grafana'ya ulaşmıyorsa ilk bakılacak yer burasıdır. Neden kullandığımız aşağıda açıklanmıştır. |
+| Loki | `http://localhost:3100` | Logların saklandığı ve LogQL ile sorgulandığı yer. Kendi arayüzü yoktur, Grafana üzerinden kullanılır. Logların tamamını değil sadece etiketlerini *(`service`, `level` gibi)* indekslediği için **Elasticsearch** gibi çözümlere göre çok daha az kaynak tüketir. `http://localhost:3100/ready` adresi Loki'nin hazır olup olmadığını söyler. |
+| Rust API | `http://localhost:8081` | Hataları `Result` ve `enum` ile **değer olarak** yöneten sipariş servisi. `/metrics` adresinden Prometheus'un okuduğu ham metrikler görülebilir. |
+| Python API *(Swagger)* | `http://localhost:8082/docs` | Aynı API'yi **exception hiyerarşisi** ile sunan sipariş servisi. Swagger arayüzü üzerinden hata senaryoları tarayıcıdan denenebilir. Metrikler `http://localhost:8082/metrics/` adresindedir. |
 
 > İlk derleme Rust bağımlılıkları nedeniyle birkaç dakika sürebilir. Ana dizindeki `docker-compose.yml` ile port çakışması olmaması için Prometheus *(9090)*, Grafana *(3000)* ve Loki *(3100)* portlarını kullanan başka bir container olmadığından emin oolmakta yarar var.
+
+**Neden Alloy kullandık?**
+
+Rust ve Python ile geliştirilmiş örnek servisler loglarını sadece **stdout**'a JSON olarak yazmaktalar. Loki'yi bilmezler *(12-Factor App, Logs ilkesi)*. Loki ise kendisi gidip log toplamaz, bunun yerine logların ona gönderilmesini *(push)* bekler. Bu iki uç arasında container loglarını okuyup Loki'ye taşıyacak bir aracıya ihtiyaç olduğundan Alloy devreye girer. Alloy bu boşluğu dolduran log toplayıcı ajan olarak düşünülebilir.
+
+Bu işi yapmanın başka yolları da var.
+
+| **Alternatif** | **Neden Tercih Etmedik?** |
+| --- | --- |
+| Uygulamanın logları doğrudan Loki'ye göndermesi | Her dil için ayrı bir kütüphane gerekir *(Rust ve Python için iki farklı entegrasyon)*. Uygulama altyapıya bağımlı hale gelir ve Loki değişirse kodu da değiştirmek gerekir. Loki erişilemezse loglar kaybolabilir veya uygulama yavaşlayabilir. |
+| Docker'ın Loki logging driver eklentisi | Her makineye ayrıca eklenti kurmak gerekir, Docker Desktop *(Windows / macOS)* ortamlarında sorun çıkarabilir. Loki'ye ulaşılamadığında container'ları da etkileyebilir. |
+| Promtail | Eskiden bu iş için kullanılan Grafana aracıydı fakat Grafana da artık Promtail yerine Alloy'u kullanmayı öneriyor. Tabii bu da değişebilir :D |
+
+Alloy'un bu örnekte yaptığı işler *([config.alloy](apps/lesson02/error-handling/observability/alloy/config.alloy))* dosyasında tanımlanmıştır.
+
+1. **Keşif** *(discovery)*: Docker soketi üzerinden çalışan container'ları bulur. Sadece `logging=alloy` etiketine sahip olanları alır. Böylece Loki, Grafana gibi altyapı container örneklerinin logları birbirine karışmaz.
+2. **Etiketleme ***(labeling)***: docker-compose servis adını `service` etiketi olarak ekler. Grafana'da `{service="rust-order-service"}` diye sorgulayabilmemiz mümkün hale gelir.
+3. **Ayrıştırma ve normalleştirme**: JSON log satırından `level` alanını okur. Rust `WARN`, Python `WARNING` yazdığı için ikisini de `warn` değerine çevirir ve böylece iki dilin logları tek bir sorguyla filtrelenebilir.
+4. **Güvenilir gönderim**: Logları Loki'ye gönderir. Loki kısa süreliğine erişilemezse bekletip yeniden dener.
+
+> Uygulama kodu tek satır bile değişmeden log altyapısını değiştirebiliyor olmamız bu ayrımın en büyük kazancıdır. Yarın Loki yerine başka bir sistem kullanmak istersek sadece Alloy ayarını değiştiririz. Ayrıca Alloy sadece log değil, metrik ve **OpenTelemetry** izlerini *(traces)* de toplayabilen tek bir ajan olarak tasarlanmıştır. Daha büyük sistemlerde Prometheus scraping ve trace toplama işleri de aynı ajan tarafından değerlendirilebilir.
 
 Çalışmayı görmenin en iyi yolu python script'i ile trafik üretmektir.
 
