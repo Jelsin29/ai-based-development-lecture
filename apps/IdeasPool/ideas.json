@@ -1,0 +1,23 @@
+[
+  {
+    "id": 1,
+    "title": "Yapay Zeka Ders Notları Wiki Sayfası",
+    "description": "Yapay zeka dersindeki dokümanlar ve notlarad github wiki sayfalarının hazırlanması için bir çalışma yapmayı planlıyorum.",
+    "createdAt": "2026-10-16",
+    "status": "reviewed"
+  },
+  {
+    "id": 2,
+    "title": "Mars görevi",
+    "description": "Yürüyerek mars gezegenine gitmeyi planlıyorum.",
+    "createdAt": "2026-10-16",
+    "status": "reviewed"
+  },
+  {
+    "id": 3,
+    "title": "Veri dönüştürücü komut satırı aracı",
+    "description": "JSON,XML, BSON,CSV formatındaki içeriklerin birbirleri arasında dönüştüren bir araç yazılması. Programlama dili olarak Rust kullanılması",
+    "createdAt": "2026-10-16",
+    "status": "reviewed"
+  }
+]

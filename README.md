@@ -32,6 +32,7 @@ Konya Gıda ve Tarım Üniversitesi Yazılım Mühendisliği ve Pamukkale Ünive
     - [Setup (Visual Studio Code)](#setup-visual-studio-code)
     - [Deneme](#deneme)
     - [Setup (Copilot CLI)](#setup-copilot-cli)
+  - [Ek 3 - Claude Plugin Kullanımı](#ek-3---claude-plugin-kullanımı)
   - [Aman Dikkat](#aman-dikkat)
   - [Ders Geçme Prosedürü](#ders-geçme-prosedürü)
     - [Proje Değerlendirmesi](#proje-değerlendirmesi)
@@ -1234,6 +1235,49 @@ Copilot CLI kullanımı sırasında Aspire Dashboard ile izlenebilecek örnek sa
 Örnek bir istek sonrası oluşan token kullanımlarına ait grafiksel özet.
 
 ![Aspire Dashboard IV](./images/day14_04.png)
+
+## Ek 3 - Claude Plugin Kullanımı
+
+Birden fazla skill veya agent'ı, hook mekanizmalarını da işin içerisine katıp paketlemek mümkündür. Bu paketler plugin olarak adlandırılırlar. Claude tarafında plugin'lerin nasıl yazılacağına dair dokümantasyona [buradan](apps/IdeasPool/docs/plugin-rehberi.md) ulaşabilirsiniz.
+
+```bash
+# Claude session'ının ilgili plugin ile başlatılması
+claude --plugin-dir ./plugins/ideas
+```
+
+Bu örnekteki plugin basitçe bir hello world çalışması olarak düşünülebilir. Fikir eklenmesi, fikirlerin listelenmesi ve fikrin değerlendirilip fizibilitesinin yapılması gibi işlemleri içeren skill, agent ve hook mekanizmalarını içermektedir. Çalışma zamanına ait eğlenceli çıktılara gelirsek.
+
+Yeni bir fikir eklenmesi ve listelenmesi; *(add ve list skill'leri çalışır)*
+
+```text
+/ideas:add "Yapay Zeka Ders Notları Wiki Sayfası. Yapay zeka dersindeki dokümanlar ve notlarad github wiki sayfalarının hazırlanması için bir çalışma yapmayı planlıyorum."
+```
+
+![Claude plugin 00](./images/claude_plugin_00.png)
+
+Oldukça iddialı bir fikrin eklenmesi; *(add skill'i çalışır)*
+
+```text
+/ideas:add "Mars görevi. Yürüyerek mars gezegenine gitmeyi planlıyorum."
+```
+
+![Claude plugin 01](./images/claude_plugin_01.png)
+
+Fikrin değerlendirilmesi ve fizibilitesinin yapılması süreci :D *(idea-reviewer ajanı devreye girer)*
+
+```text
+ideas:idea-reviewer #2 numaralı fikrimi değerlendirebilir misin?
+```
+
+![Claude plugin 02](./images/claude_plugin_02.png)
+
+Tüm fikirlerin değerlendirilmesi *(idea-reviewer ajanı devreye girer)*
+
+```text
+ideas:idea-reviewer Bütün fikirleri değerlendir.
+```
+
+![Claude plugin 03](./images/claude_plugin_03.png)
 
 ## Aman Dikkat
 
